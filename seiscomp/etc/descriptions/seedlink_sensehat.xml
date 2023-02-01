@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<seiscomp>
+	<binding module="seedlink" name="sensehat" category="sources">
+		<description>Raspberry Pi Sense Hat (B)</description>
+		<configuration>
+			<parameter name="device" type="string" default="/dev/i2c-1">
+				<description>
+				I2C bus device.
+				</description>
+			</parameter>
+			<parameter name="decimationFactor" type="int" default="2">
+				<description>
+				Decimation factor. Nominal output data rate is 1125 Hz divided
+				by the decimation factor.
+				</description>
+			</parameter>
+			<parameter name="lowpassFilter" type="int" default="3">
+				<description>
+				Lowpass filter to use (see ICM-20948 datasheet).
+				</description>
+			</parameter>
+			<parameter name="proc" type="string" default="sensehat560">
+				<description>
+				Name of the proc object (defined in streams.xml); used for processing
+				raw streams (streams submitted by a plugin as raw samples).
+				</description>
+			</parameter>
+		</configuration>
+	</binding>
+</seiscomp>

@@ -1,0 +1,314 @@
+#!/usr/bin/env python3
+
+import os
+import time
+import datetime
+import struct
+import smbus
+import argparse
+
+
+VERSION = "2023.032"
+
+
+class ICM20948(object):
+    # device I2C address
+    I2C_ADD_ICM20948 = 0x68
+
+    # user bank 0 register
+    REG_ADD_WIA = 0x00
+    REG_VAL_WIA = 0xEA
+    REG_ADD_USER_CTRL = 0x03
+    REG_ADD_PWR_MGMT_1 = 0x06
+    REG_ADD_PWR_MGMT_2 = 0x07
+    REG_ADD_REG_BANK_SEL = 0x7F
+    REG_VAL_REG_BANK_0 = 0x00
+    REG_VAL_REG_BANK_1 = 0x10
+    REG_VAL_REG_BANK_2 = 0x20
+    REG_VAL_REG_BANK_3 = 0x30
+    REG_ADD_FIFO_EN_2 = 0x67
+    REG_ADD_FIFO_RST = 0x68
+    REG_ADD_FIFO_COUNT_H = 0x70
+    REG_ADD_FIFO_RW = 0x72
+
+    # user bank 2 register
+    REG_ADD_ACCEL_SMPLRT_DIV_2 = 0x11
+    REG_ADD_ACCEL_CONFIG = 0x14
+
+    def __read_byte(self, reg):
+        return self._bus.read_byte_data(self._address, reg)
+
+    def __read_block(self, reg, length=1):
+        return self._bus.read_i2c_block_data(self._address, reg, length)
+
+    def __write_byte(self, reg, val):
+        self._bus.write_byte_data(self._address, reg, val)
+        time.sleep(0.0001)
+
+    def __init__(self, bus="/dev/i2c-1", address=I2C_ADD_ICM20948, dec=2, lpf=3):
+        try:
+            self._bus = smbus.SMBus(bus)
+
+        except TypeError:
+            # Needs a number instead of path
+            self._bus = smbus.SMBus(int(bus[-1]))
+
+        self._address = address
+
+        if self.__read_byte(ICM20948.REG_ADD_WIA) == ICM20948.REG_VAL_WIA:
+            print("ICM-20948 OK")
+
+        else:
+            raise Exception("ICM-20948 Error")
+
+        # user bank 0 register
+        self.__write_byte(ICM20948.REG_ADD_REG_BANK_SEL, ICM20948.REG_VAL_REG_BANK_0)
+        self.__write_byte(ICM20948.REG_ADD_PWR_MGMT_1, 0x80)  # device reset
+
+        time.sleep(0.1)
+
+        self.__write_byte(ICM20948.REG_ADD_PWR_MGMT_1, 0x8)  # internal oscillator, disable temp
+        self.__write_byte(ICM20948.REG_ADD_PWR_MGMT_2, 0x7)  # disable gyro
+
+        # user bank 2 register
+        self.__write_byte(ICM20948.REG_ADD_REG_BANK_SEL, ICM20948.REG_VAL_REG_BANK_2)
+        self.__write_byte(ICM20948.REG_ADD_ACCEL_SMPLRT_DIV_2, (dec - 1) & 0xff)
+        self.__write_byte(ICM20948.REG_ADD_ACCEL_CONFIG, 0x01 | (lpf & 0x7) << 3)  # 2g+DLPF
+
+        # user bank 0 register
+        self.__write_byte(ICM20948.REG_ADD_REG_BANK_SEL, ICM20948.REG_VAL_REG_BANK_0)
+        self.__write_byte(ICM20948.REG_ADD_USER_CTRL, 0x40)  # FIFO_EN
+        self.__write_byte(ICM20948.REG_ADD_FIFO_EN_2, 0x10)  # ACCEL_FIFO_EN
+        self.__write_byte(ICM20948.REG_ADD_FIFO_RST, 0x01)   # FIFO reset
+        self.__write_byte(ICM20948.REG_ADD_FIFO_RST, 0x00)
+
+    def accel_read_FIFO(self):
+        data = ([], [], [])
+
+        # assuming bank 0
+        d = self.__read_block(ICM20948.REG_ADD_FIFO_COUNT_H, 2)
+        count = (d[0] & 0xf) << 8 | d[1]
+
+        t_end = datetime.datetime.now()
+
+        for i in range(count // 6):
+            for j in range(3):
+                v = self.__read_byte(ICM20948.REG_ADD_FIFO_RW) << 8 | \
+                    self.__read_byte(ICM20948.REG_ADD_FIFO_RW)
+
+                if v > 32767:
+                    v -= 65536
+
+                data[j].append(v)
+
+        return t_end, data
+
+
+class LPS22HB(object):
+    # device I2C address
+    I2C_ADD_LPS22HB = 0x5C
+
+    REG_ADD_WIA = 0x0F
+    REG_VAL_WIA = 0xB1
+    REG_ADD_CTRL1 = 0x10
+    REG_ADD_CTRL2 = 0x11
+    REG_ADD_STATUS = 0x27
+    REG_ADD_PRESS_OUT_XL = 0x28
+    REG_ADD_PRESS_OUT_L = 0x29
+    REG_ADD_PRESS_OUT_H = 0x2A
+    REG_ADD_TEMP_OUT_L = 0x2B
+    REG_ADD_TEMP_OUT_H = 0x2C
+
+    def __read_byte(self, reg):
+        return self._bus.read_byte_data(self._address, reg)
+
+    def __write_byte(self, reg, val):
+        self._bus.write_byte_data(self._address, reg, val)
+        time.sleep(0.0001)
+
+    def __init__(self, bus="/dev/i2c-1", address=I2C_ADD_LPS22HB):
+        try:
+            self._bus = smbus.SMBus(bus)
+
+        except TypeError:
+            # Needs a number instead of path
+            self._bus = smbus.SMBus(int(bus[-1]))
+
+        self._address = address
+
+        if self.__read_byte(LPS22HB.REG_ADD_WIA) == LPS22HB.REG_VAL_WIA:
+            print("LPS22HB OK")
+
+        else:
+            raise Exception("LPS22HB Error")
+
+        # reset device
+        self.__write_byte(LPS22HB.REG_ADD_CTRL2, 0x04)
+
+        while self.__read_byte(LPS22HB.REG_ADD_CTRL2) & 0x04:
+            pass
+
+        self.__write_byte(LPS22HB.REG_ADD_CTRL1, 0x02)  # BDU
+
+    def measure(self):
+        self.__write_byte(LPS22HB.REG_ADD_CTRL2, 0x01)
+
+    def ready(self):
+        return bool(self.__read_byte(LPS22HB.REG_ADD_STATUS) & 0x03)
+
+    def get_result(self):
+        # In BDU mode, PRESS_OUT_H must be the last address read
+
+        temp = self.__read_byte(LPS22HB.REG_ADD_TEMP_OUT_L) | \
+               self.__read_byte(LPS22HB.REG_ADD_TEMP_OUT_H) << 8
+
+        if temp > 32767:
+            temp -= 65536
+
+        press = self.__read_byte(LPS22HB.REG_ADD_PRESS_OUT_XL) | \
+                self.__read_byte(LPS22HB.REG_ADD_PRESS_OUT_L) << 8 | \
+                self.__read_byte(LPS22HB.REG_ADD_PRESS_OUT_H) << 16
+
+        return press, temp
+
+
+_doy = (0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334, 365)
+
+
+def _is_leap(y):
+    """True if y is a leap year."""
+    return (y % 400 == 0) or (y % 4 == 0 and y % 100 != 0)
+
+
+def _ldoy(y, m):
+    """The day of the year of the first day of month m, in year y.
+
+    Note: for January, m=1; for December, m=12.
+    Examples:
+    _ldoy(1900, 4) = 90
+    _ldoy(1900, 1) = 0
+    _ldoy(1999, 4) = 90
+    _ldoy(2004, 4) = 91
+    _ldoy(2000, 4) = 91
+
+    """
+    return _doy[m - 1] + (_is_leap(y) and m >= 3)
+
+
+def _mdy2dy(month, day, year):
+    return _ldoy(year, month) + day
+
+
+class Seedlink(object):
+    def __init__(self):
+        self.__fd = os.fdopen(63, "wb")
+
+    def send_raw3(self, sta, cha, t, usec_corr, tqual, data):
+        packet = struct.pack(
+            "@i10s10s9i%di" % len(data),
+            8,
+            sta.encode(),
+            cha.encode(),
+            t.year,
+            _mdy2dy(t.month, t.day, t.year),
+            t.hour,
+            t.minute,
+            t.second,
+            t.microsecond,
+            usec_corr,
+            tqual,
+            len(data),
+            *data
+        )
+
+        self.__fd.write(packet)
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        formatter_class = argparse.RawTextHelpFormatter
+    )
+
+    parser.set_defaults(
+        bus = "/dev/i2c-1",
+        decimation = 2,
+        lowpass_filter = 3
+    )
+
+    parser.add_argument("--version",
+        action = "version",
+        version = "%(prog)s " + VERSION
+    )
+
+    parser.add_argument("-b", "--bus",
+        help = "I2C bus device (default %(default)s)"
+    )
+
+    parser.add_argument("-d", "--decimation",
+        type = int,
+        metavar = "N",
+        help = "decimation factor (1..256, default %(default)s)\n"
+               "nominal output data rate = 1125/N Hz"
+    )
+
+    parser.add_argument("-l", "--lowpass-filter",
+        type = int,
+        metavar = "N",
+        help = "lowpass filter (0..7, default %(default)s)"
+    )
+
+    parser.add_argument("-s", "--station",
+        help = "station ID"
+    )
+
+    parser.add_argument("plugin_id",
+        nargs = "?",
+        help = "plugin ID"
+    )
+
+    args = parser.parse_args()
+
+    if args.decimation < 1 or args.decimation > 256:
+        parser.error("invalid decimation factor")
+
+    if args.lowpass_filter < 0 or args.lowpass_filter > 7:
+        parser.error("invalid lowpass filter")
+
+    icm = ICM20948(bus=args.bus, dec=args.decimation, lpf=args.lowpass_filter)
+    lps = LPS22HB(bus=args.bus)
+    sl = Seedlink()
+
+    t = None
+    t_1s = None
+    lps_wait = False
+
+    while True:
+        time.sleep(0.1)
+        t_end, data = icm.accel_read_FIFO()
+
+        if t is not None:
+            sl.send_raw3(args.station, "X", t, 0, -1, data[0])
+            sl.send_raw3(args.station, "Y", t, 0, -1, data[1])
+            sl.send_raw3(args.station, "Z", t, 0, -1, data[2])
+
+            if t - t_1s >= datetime.timedelta(seconds=1):
+                if not lps_wait:
+                    lps.measure()
+                    lps_wait = True
+
+                elif lps.ready():
+                    lps_wait = False
+                    t_1s += datetime.timedelta(seconds=1)
+                    press, temp = lps.get_result()
+                    sl.send_raw3(args.station, "D", t_1s, 0, -1, [press])
+                    sl.send_raw3(args.station, "K", t_1s, 0, -1, [temp])
+
+        else:
+            t_1s = t_end
+
+        t = t_end
+
+
+if __name__ == "__main__":
+    main()
+
